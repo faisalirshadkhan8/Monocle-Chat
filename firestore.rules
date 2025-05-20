@@ -1,0 +1,20 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Users can create their own document in the 'users' collection.
+    // The document ID must be the same as their user ID (uid).
+    match /users/{userId} {
+      allow create: if request.auth != null && request.auth.uid == userId;
+      // Users can read, update, or delete their own document.
+      allow read, update, delete: if request.auth != null && request.auth.uid == userId;
+    }
+    // Add other rules for other collections here if needed
+
+    // Fallback rule: Deny all other access by default (safer than a global allow)
+    // This is implicitly covered if no other rules match, but can be made explicit.
+    // match /{document=**} {
+    //   allow read, write: if false;
+    // }
+  }
+}

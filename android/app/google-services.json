@@ -1,0 +1,40 @@
+{
+  "project_info": {
+    "project_number": "122088173393",
+    "firebase_url": "https://monocle-chat-default-rtdb.firebaseio.com",
+    "project_id": "monocle-chat",
+    "storage_bucket": "monocle-chat.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:122088173393:android:5a3a8ad80f77d59db6ad70",
+        "android_client_info": {
+          "package_name": "com.example.untitled"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "122088173393-89nbeck8u28ohgi9durbqdpsqpnlp6j8.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCrW7D2YZDXjjSuqu0rS--T39J8LJC1qWw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "122088173393-89nbeck8u28ohgi9durbqdpsqpnlp6j8.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
