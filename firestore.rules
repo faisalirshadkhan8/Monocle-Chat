@@ -1,20 +1,55 @@
 rules_version = '2';
-
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Users can create their own document in the 'users' collection.
-    // The document ID must be the same as their user ID (uid).
+    // Users can manage their own profile
     match /users/{userId} {
       allow create: if request.auth != null && request.auth.uid == userId;
-      // Users can read, update, or delete their own document.
-      allow read, update, delete: if request.auth != null && request.auth.uid == userId;
+      allow read: if request.auth != null;
+      allow update, delete: if request.auth != null && request.auth.uid == userId;
     }
-    // Add other rules for other collections here if needed
 
-    // Fallback rule: Deny all other access by default (safer than a global allow)
-    // This is implicitly covered if no other rules match, but can be made explicit.
-    // match /{document=**} {
-    //   allow read, write: if false;
-    // }
+    match /chat_rooms/{chatRoomId} {
+      // Allow read if user is in participants list OR chat ID matches UID pattern
+      allow read: if request.auth != null && 
+                   (resource.data != null && resource.data.participants != null && resource.data.participants.hasAny([request.auth.uid]) ||
+                   chatRoomId.matches(request.auth.uid + '_.*') || 
+                   chatRoomId.matches('.*_' + request.auth.uid));
+
+      // Create allowed only if user includes themselves in participants
+      allow create: if request.auth != null && 
+                     request.auth.uid in request.resource.data.participants;
+
+      // Update allowed only for participants
+      allow update: if request.auth != null && 
+                      resource.data.participants != null && request.auth.uid in resource.data.participants;
+
+      match /messages/{messageId} {
+        // Allow read if the requesting user is a participant in the parent chat room
+        allow read: if request.auth != null &&
+                     get(/databases/$(database)/documents/chat_rooms/$(chatRoomId)).data.participants.hasAny([request.auth.uid]);
+
+        // Allow create if:
+        // 1. User is sender
+        // 2. User is in parent chat room participants
+        allow create: if request.auth != null &&
+                      request.resource.data.senderId == request.auth.uid &&
+                      get(/databases/$(database)/documents/chat_rooms/$(chatRoomId)).data.participants.hasAny([request.auth.uid]);
+
+        // Allow update only for marking messages as seen
+        allow update: if request.auth != null &&
+                      get(/databases/$(database)/documents/chat_rooms/$(chatRoomId)).data.participants.hasAny([request.auth.uid]) &&
+                      request.auth.uid == resource.data.receiverId &&
+                      request.resource.data.isSeen == true &&
+                      resource.data.isSeen == false &&
+                      request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isSeen']);
+
+        allow delete: if false;
+      }
+    }
+
+    // Deny all other operations by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
   }
 }

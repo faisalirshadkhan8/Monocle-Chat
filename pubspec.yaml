@@ -38,6 +38,7 @@ dependencies:
   flutter_svg: ^2.0.10+1
   cached_network_image: ^3.3.1
   flutter_riverpod: ^2.5.1 # Added Riverpod
+  intl: ^0.19.0 # Added for date formatting
 
   # Firebase dependencies
   firebase_core: ^2.25.5
@@ -46,6 +47,7 @@ dependencies:
   firebase_storage: ^11.6.8
   firebase_messaging: ^14.7.18
   firebase_analytics: ^10.8.8
+  flutter_local_notifications: ^17.0.0 # For local notification display
 
 dev_dependencies:
   flutter_test:

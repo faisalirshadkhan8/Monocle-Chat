@@ -1,53 +1,119 @@
-import 'package:flutter/material.dart';
-import 'package:monocle_chat/widgets/chat_bubble.dart';
+// ignore_for_file: avoid_print
 
-class ChatDetailScreen extends StatefulWidget {
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:monocle_chat/models/message_model.dart';
+import 'package:monocle_chat/widgets/chat_bubble.dart';
+import 'package:intl/intl.dart';
+
+final currentUserProvider = Provider<User?>((ref) {
+  return FirebaseAuth.instance.currentUser;
+});
+
+final messagesStreamProvider = StreamProvider.autoDispose
+    .family<List<MessageModel>, String>((ref, chatRoomId) {
+      final firestore = FirebaseFirestore.instance;
+      return firestore
+          .collection('chat_rooms')
+          .doc(chatRoomId)
+          .collection('messages')
+          .orderBy('timestamp', descending: false)
+          .snapshots()
+          .map(
+            (snapshot) =>
+                snapshot.docs
+                    .map((doc) => MessageModel.fromFirestore(doc))
+                    .toList(),
+          );
+    });
+
+class ChatDetailScreen extends ConsumerStatefulWidget {
+  static const String routeName = '/chat_detail'; // Add this line
+
   final String name;
-  final String? profilePicture; // Changed to nullable String
-  final String receiverId; // Added receiverId
-  final String chatRoomId; // Added chatRoomId
+  final String? profilePicture;
+  final String receiverId;
+  final String chatRoomId;
 
   const ChatDetailScreen({
     super.key,
     required this.name,
-    this.profilePicture, // Changed to nullable
-    required this.receiverId, // Added receiverId
-    required this.chatRoomId, // Added chatRoomId
+    this.profilePicture,
+    required this.receiverId,
+    required this.chatRoomId,
   });
 
   @override
-  State<ChatDetailScreen> createState() => _ChatDetailScreenState();
+  ConsumerState<ChatDetailScreen> createState() => _ChatDetailScreenState();
 }
 
-class _ChatDetailScreenState extends State<ChatDetailScreen> {
+class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
   final TextEditingController _messageController = TextEditingController();
-  final List<Map<String, dynamic>> _messages = [];
+  final ScrollController _scrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
-    // Add some dummy messages for testing
-    _messages.addAll([
-      {
-        'text': 'Good day to you, my friend.',
-        'timestamp': '10:30 AM',
-        'isSent': false,
-      },
-      {
-        'text': 'Indeed, a splendid morning.',
-        'timestamp': '10:32 AM',
-        'isSent': true,
-      },
-      {
-        'text': 'Shall we meet for tea later?',
-        'timestamp': '10:33 AM',
-        'isSent': false,
-      },
-    ]);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollToBottom();
+    });
+  }
+
+  void _scrollToBottom() {
+    if (_scrollController.hasClients) {
+      _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+    }
+  }
+
+  Future<void> _sendMessage() async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (_messageController.text.trim().isEmpty || currentUser == null) return;
+
+    final messageText = _messageController.text.trim();
+    _messageController.clear();
+
+    try {
+      // Create message document
+      await FirebaseFirestore.instance
+          .collection('chat_rooms')
+          .doc(widget.chatRoomId)
+          .collection('messages')
+          .add({
+            'senderId': currentUser.uid,
+            'receiverId': widget.receiverId,
+            'text': messageText,
+            'timestamp': FieldValue.serverTimestamp(),
+            'isSeen': false,
+          });
+
+      // Update chat room metadata
+      await FirebaseFirestore.instance
+          .collection('chat_rooms')
+          .doc(widget.chatRoomId)
+          .update({
+            'lastMessage': messageText,
+            'lastMessageTimestamp': FieldValue.serverTimestamp(),
+            'lastMessageSenderId': currentUser.uid,
+          });
+
+      _scrollToBottom();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error sending message: ${e.toString()}')),
+        );
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final messagesAsyncValue = ref.watch(
+      messagesStreamProvider(widget.chatRoomId),
+    );
+
     return Scaffold(
       appBar: AppBar(
         backgroundColor: const Color(0xFF2B1A0F),
@@ -57,21 +123,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
               backgroundImage:
                   widget.profilePicture != null &&
                           widget.profilePicture!.isNotEmpty
-                      ? NetworkImage(
-                        widget.profilePicture!,
-                      ) // Use NetworkImage if URL exists
-                      : const AssetImage(
-                            'assets/profile_pictures/dummy.jpg', // Fallback local asset
-                          )
+                      ? NetworkImage(widget.profilePicture!)
+                      : const AssetImage('assets/profile_pictures/dummy.jpg')
                           as ImageProvider,
-              child:
-                  widget.profilePicture == null ||
-                          widget.profilePicture!.isEmpty
-                      ? const Icon(
-                        Icons.person,
-                        color: Color(0xFF2B1A0F),
-                      ) // Fallback icon
-                      : null,
             ),
             const SizedBox(width: 10),
             Text(
@@ -84,79 +138,117 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
             ),
           ],
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.more_vert, color: Color(0xFFD4AF37)),
-            onPressed: () {},
-          ),
-        ],
       ),
       body: Container(
         decoration: const BoxDecoration(color: Color(0xFFFFF4E6)),
         child: Column(
           children: [
             Expanded(
-              child: ListView.builder(
-                padding: const EdgeInsets.all(10),
-                itemCount: _messages.length,
-                itemBuilder: (context, index) {
-                  final message = _messages[index];
-                  return Align(
-                    alignment:
-                        message['isSent']
-                            ? Alignment.centerRight
-                            : Alignment.centerLeft,
-                    child: ChatBubble(
-                      message: message['text'],
-                      timestamp: message['timestamp'],
-                      isSent: message['isSent'],
-                      isSeen: message['isSent'],
-                    ),
+              child: messagesAsyncValue.when(
+                data: (messages) {
+                  if (messages.isEmpty) {
+                    return const Center(
+                      child: Text(
+                        'No messages yet. Say hello!',
+                        style: TextStyle(fontFamily: 'CormorantGaramond'),
+                      ),
+                    );
+                  }
+                  WidgetsBinding.instance.addPostFrameCallback(
+                    (_) => _scrollToBottom(),
+                  );
+                  return ListView.builder(
+                    controller: _scrollController,
+                    padding: const EdgeInsets.all(10),
+                    itemCount: messages.length,
+                    itemBuilder: (context, index) {
+                      final message = messages[index];
+                      final currentUserId =
+                          FirebaseAuth.instance.currentUser?.uid;
+                      final isSentByCurrentUser =
+                          message.senderId == currentUserId;
+
+                      // Mark messages as seen
+                      if (!isSentByCurrentUser &&
+                          !message.isSeen &&
+                          message.messageId.isNotEmpty) {
+                        FirebaseFirestore.instance
+                            .collection('chat_rooms')
+                            .doc(widget.chatRoomId)
+                            .collection('messages')
+                            .doc(message.messageId)
+                            .update({'isSeen': true})
+                            .catchError((error) {
+                              print("Error updating isSeen: $error");
+                            });
+                      }
+
+                      // Timestamp formatting
+                      String formattedTimestamp;
+                      final messageDateTime = message.timestamp.toDate();
+                      final now = DateTime.now();
+                      if (now.year == messageDateTime.year &&
+                          now.month == messageDateTime.month &&
+                          now.day == messageDateTime.day) {
+                        formattedTimestamp = DateFormat.jm().format(
+                          messageDateTime,
+                        );
+                      } else if (now.year == messageDateTime.year &&
+                          now.month == messageDateTime.month &&
+                          now.day - messageDateTime.day == 1) {
+                        formattedTimestamp =
+                            'Yesterday ${DateFormat.jm().format(messageDateTime)}';
+                      } else {
+                        formattedTimestamp = DateFormat.yMd().add_jm().format(
+                          messageDateTime,
+                        );
+                      }
+
+                      return ChatBubble(
+                        message: message.text,
+                        timestamp: formattedTimestamp,
+                        isSent: isSentByCurrentUser,
+                        isSeen: message.isSeen,
+                      );
+                    },
                   );
                 },
+                loading: () => const Center(child: CircularProgressIndicator()),
+                error:
+                    (error, _) =>
+                        Center(child: Text('Error: ${error.toString()}')),
               ),
             ),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              height: 70,
-              color: Colors.white,
-              child: Row(
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.attach_file),
-                    onPressed: () {},
-                  ),
-                  Expanded(
-                    child: TextField(
-                      controller: _messageController,
-                      decoration: const InputDecoration(
-                        hintText: 'Compose your message...',
-                        border: InputBorder.none,
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.send),
-                    onPressed: () {
-                      if (_messageController.text.isNotEmpty) {
-                        setState(() {
-                          _messages.add({
-                            'text': _messageController.text,
-                            'timestamp':
-                                '${DateTime.now().hour}:${DateTime.now().minute}',
-                            'isSent': true,
-                            'isSeen': false,
-                          });
-                          _messageController.clear();
-                        });
-                      }
-                    },
-                  ),
-                ],
-              ),
-            ),
+            _buildMessageInput(),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildMessageInput() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      color: Colors.white,
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: _messageController,
+              decoration: const InputDecoration(
+                hintText: 'Compose your message...',
+                border: InputBorder.none,
+                contentPadding: EdgeInsets.symmetric(horizontal: 10),
+              ),
+              textInputAction: TextInputAction.send,
+              onSubmitted: (_) => _sendMessage(),
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.send, color: Color(0xFF2B1A0F)),
+            onPressed: _sendMessage,
+          ),
+        ],
       ),
     );
   }
@@ -164,6 +256,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   @override
   void dispose() {
     _messageController.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 }

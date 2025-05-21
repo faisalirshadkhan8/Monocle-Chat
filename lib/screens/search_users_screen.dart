@@ -1,4 +1,6 @@
-// ignore_for_file: library_private_types_in_public_api, unnecessary_string_escapes
+// ignore_for_file: library_private_types_in_public_api, unnecessary_string_escapes, avoid_print, use_build_context_synchronously
+
+import 'dart:math' as math; // Import dart:math
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -71,7 +73,6 @@ class _SearchUsersScreenState extends ConsumerState<SearchUsersScreen> {
   @override
   Widget build(BuildContext context) {
     final usersAsyncValue = ref.watch(usersStreamProvider);
-    final currentUser = ref.watch(authNotifierProvider).user;
 
     return Scaffold(
       appBar: AppBar(
@@ -158,24 +159,124 @@ class _SearchUsersScreenState extends ConsumerState<SearchUsersScreen> {
                         userData['email'] ?? 'N/A',
                         style: const TextStyle(fontFamily: 'Lora'),
                       ),
-                      onTap: () {
-                        if (currentUser?.uid != null) {
-                          final chatRoomId = getChatRoomId(
-                            currentUser!.uid,
-                            userDoc.id,
+                      onTap: () async {
+                        print(
+                          'SearchUsersScreen: onTap triggered for user: ${userData['email'] ?? 'N/A'}',
+                        );
+
+                        // It's better to read the auth state directly inside the async function
+                        // to ensure it's the most current when the tap occurs.
+                        final authUser = ref.read(authNotifierProvider).user;
+
+                        if (authUser == null) {
+                          // Check if authUser itself is null first
+                          print(
+                            'SearchUsersScreen: Current user is null (not authenticated). Cannot proceed.',
                           );
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder:
-                                  (context) => ChatDetailScreen(
-                                    name: userData['name'] ?? 'N/A',
-                                    profilePicture: profilePictureUrl,
-                                    receiverId: userDoc.id,
-                                    chatRoomId: chatRoomId,
-                                  ),
-                            ),
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Error: Not authenticated. Please log in again.',
+                                ),
+                              ),
+                            );
+                          }
+                          return;
+                        }
+                        // Since authUser is not null here, we can safely access uid.
+                        print(
+                          'SearchUsersScreen: Current User ID: ${authUser.uid}',
+                        );
+
+                        final currentUserId = authUser.uid;
+                        final otherUserId = userDoc.id;
+                        final chatRoomId = getChatRoomId(
+                          currentUserId,
+                          otherUserId,
+                        );
+                        print(
+                          'SearchUsersScreen: ChatRoomID: $chatRoomId, OtherUserID: $otherUserId',
+                        );
+
+                        try {
+                          final chatRoomRef = FirebaseFirestore.instance
+                              .collection('chat_rooms')
+                              .doc(chatRoomId);
+
+                          print(
+                            'SearchUsersScreen: Attempting to get chat room snapshot...',
                           );
+                          final chatRoomSnap = await chatRoomRef.get();
+                          print(
+                            'SearchUsersScreen: Chat room snapshot exists: ${chatRoomSnap.exists}',
+                          );
+
+                          if (!chatRoomSnap.exists) {
+                            print(
+                              'SearchUsersScreen: Chat room does not exist. Attempting to create...',
+                            );
+                            await chatRoomRef.set({
+                              'chatRoomId': chatRoomId,
+                              'participants': [currentUserId, otherUserId],
+                              'lastMessage': '',
+                              'lastMessageTimestamp':
+                                  FieldValue.serverTimestamp(),
+                              'lastMessageSenderId': '',
+                              'createdAt': FieldValue.serverTimestamp(),
+                              'participantNames': {
+                                currentUserId:
+                                    authUser.displayName ??
+                                    'User ${currentUserId.substring(0, math.min(5, currentUserId.length))}', // Used math.min
+                                otherUserId:
+                                    userData['name'] ??
+                                    'User ${otherUserId.substring(0, math.min(5, otherUserId.length))}', // Used math.min
+                              },
+                              'participantProfilePictures': {
+                                currentUserId: authUser.photoURL, // Can be null
+                                otherUserId: profilePictureUrl, // Can be null
+                              },
+                            });
+                            print(
+                              'SearchUsersScreen: Chat room created successfully.',
+                            );
+                          } else {
+                            print(
+                              'SearchUsersScreen: Chat room already exists.',
+                            );
+                          }
+
+                          if (mounted) {
+                            print(
+                              'SearchUsersScreen: Navigating to ChatDetailScreen...',
+                            );
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder:
+                                    (context) => ChatDetailScreen(
+                                      name: userData['name'] ?? 'N/A',
+                                      profilePicture: profilePictureUrl,
+                                      receiverId: userDoc.id,
+                                      chatRoomId: chatRoomId,
+                                    ),
+                              ),
+                            );
+                          } else {
+                            print(
+                              'SearchUsersScreen: Widget not mounted. Cannot navigate.',
+                            );
+                          }
+                        } catch (e, s) {
+                          print(
+                            'SearchUsersScreen: Error during Firestore operation or navigation: $e',
+                          );
+                          print('SearchUsersScreen: Stacktrace: $s');
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('An error occurred: $e')),
+                            );
+                          }
                         }
                       },
                     );

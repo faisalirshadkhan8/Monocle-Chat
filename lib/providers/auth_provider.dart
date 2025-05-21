@@ -1,6 +1,7 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 
 // This will be the type of state that our AuthNotifier will hold
 enum AuthStatus {
@@ -40,14 +41,17 @@ final authNotifierProvider = StateNotifierProvider<AuthNotifier, AuthState>((
 class AuthNotifier extends StateNotifier<AuthState> {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final FirebaseMessaging _messaging = FirebaseMessaging.instance;
 
   AuthNotifier() : super(AuthState.initial()) {
-    _auth.authStateChanges().listen((User? user) {
+    _auth.authStateChanges().listen((User? user) async {
       if (user == null) {
         state = AuthState.unauthenticated();
       } else {
         if (user.emailVerified) {
           state = AuthState.authenticated(user);
+          await _saveFcmToken(user);
+          _listenFcmTokenRefresh(user);
         } else {
           state = AuthState.requiresVerification(
             message: "Please verify your email to continue.",
@@ -60,31 +64,29 @@ class AuthNotifier extends StateNotifier<AuthState> {
 
   Future<void> signUp(String email, String password, String name) async {
     state = AuthState.loading();
-    UserCredential?
-    userCredential; // Define userCredential outside try to access in catch
+    UserCredential? userCredential;
     try {
       userCredential = await _auth.createUserWithEmailAndPassword(
         email: email,
         password: password,
       );
       if (userCredential.user != null) {
-        // Attempt to set user data in Firestore
         await _firestore.collection('users').doc(userCredential.user!.uid).set({
           'name': name,
           'email': email,
           'createdAt': Timestamp.now(),
-          'societyTier': 'Neophyte', // Default tier
-          'profilePictureUrl': null, // Add this line
+          'societyTier': 'Neophyte',
+          'profilePictureUrl': null,
         });
-        // Attempt to send verification email
         await userCredential.user!.sendEmailVerification();
+        await _saveFcmToken(userCredential.user!);
+        _listenFcmTokenRefresh(userCredential.user!);
         state = AuthState.requiresVerification(
           message:
               "A verification parchment has been dispatched. Please check your inbox.",
           user: userCredential.user,
         );
       } else {
-        // This case should ideally not be reached if createUserWithEmailAndPassword resolves without error and returns a null user
         state = AuthState.unauthenticated(
           message: "Unable to complete enlistment. No user data returned.",
         );
@@ -94,19 +96,9 @@ class AuthNotifier extends StateNotifier<AuthState> {
         message: _translateFirebaseError(e.code),
       );
     } catch (e) {
-      // If user creation was successful but another error occurred (e.g., Firestore write, email send)
-      if (userCredential?.user != null) {
-        state = AuthState.requiresVerification(
-          message:
-              "Enlistment partially complete, but an issue arose: ${e.toString()}. Please verify your email.",
-          user: userCredential!.user, // Safe due to the null check
-        );
-      } else {
-        state = AuthState.unauthenticated(
-          message:
-              "An unexpected error occurred during enlistment: ${e.toString()}",
-        );
-      }
+      state = AuthState.unauthenticated(
+        message: "An unexpected difficulty has arisen during entry.",
+      );
     }
   }
 
@@ -117,13 +109,13 @@ class AuthNotifier extends StateNotifier<AuthState> {
         email: email,
         password: password,
       );
-      // Explicitly check verification status and set state accordingly
       if (userCredential.user != null) {
         if (userCredential.user!.emailVerified) {
           state = AuthState.authenticated(userCredential.user!);
+          await _saveFcmToken(userCredential.user!);
+          _listenFcmTokenRefresh(userCredential.user!);
         } else {
-          await userCredential.user!
-              .sendEmailVerification(); // Optionally re-send verification email on login attempt if not verified
+          await userCredential.user!.sendEmailVerification();
           state = AuthState.requiresVerification(
             message:
                 "Your membership awaits confirmation. A new verification parchment has been dispatched. Kindly check your email.",
@@ -131,7 +123,6 @@ class AuthNotifier extends StateNotifier<AuthState> {
           );
         }
       }
-      // The authStateChanges listener will also update, but this provides a more immediate response
     } on FirebaseAuthException catch (e) {
       state = AuthState.unauthenticated(
         message: _translateFirebaseError(e.code),
@@ -200,6 +191,31 @@ class AuthNotifier extends StateNotifier<AuthState> {
     } else {
       state = AuthState.unauthenticated();
     }
+  }
+
+  Future<void> _saveFcmToken(User user) async {
+    try {
+      final token = await _messaging.getToken();
+      if (token != null) {
+        await _firestore.collection('users').doc(user.uid).update({
+          'fcmToken': token,
+        });
+      }
+    } catch (e) {
+      // Optionally log or handle error
+    }
+  }
+
+  void _listenFcmTokenRefresh(User user) {
+    _messaging.onTokenRefresh.listen((newToken) async {
+      try {
+        await _firestore.collection('users').doc(user.uid).update({
+          'fcmToken': newToken,
+        });
+      } catch (e) {
+        // Optionally log or handle error
+      }
+    });
   }
 
   String _translateFirebaseError(String errorCode) {
