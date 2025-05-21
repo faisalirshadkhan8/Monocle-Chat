@@ -7,6 +7,9 @@ class MessageModel {
   final Timestamp timestamp;
   final String messageId;
   bool isSeen; // Added isSeen field
+  final String? mediaUrl; // Added for image/video URLs
+  final String
+  messageType; // Added to distinguish message types (text, image, video)
 
   MessageModel({
     required this.senderId,
@@ -15,6 +18,8 @@ class MessageModel {
     required this.timestamp,
     required this.messageId,
     this.isSeen = false, // Default isSeen to false
+    this.mediaUrl,
+    this.messageType = 'text', // Default message type to 'text'
   });
 
   factory MessageModel.fromFirestore(DocumentSnapshot doc) {
@@ -26,6 +31,10 @@ class MessageModel {
       timestamp: data['timestamp'] ?? Timestamp.now(),
       messageId: doc.id,
       isSeen: data['isSeen'] ?? false, // Initialize isSeen from Firestore
+      mediaUrl: data['mediaUrl'], // Initialize mediaUrl from Firestore
+      messageType:
+          data['messageType'] ??
+          'text', // Initialize messageType from Firestore
     );
   }
 
@@ -36,6 +45,8 @@ class MessageModel {
       'text': text,
       'timestamp': timestamp,
       'isSeen': isSeen, // Add isSeen to Firestore map
+      'mediaUrl': mediaUrl, // Add mediaUrl to Firestore map
+      'messageType': messageType, // Add messageType to Firestore map
     };
   }
 }

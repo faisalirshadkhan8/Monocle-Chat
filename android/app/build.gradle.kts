@@ -7,7 +7,7 @@ plugins {
 
 android {
     namespace = "com.example.untitled"
-    compileSdk = 35
+    compileSdk = 35 // Updated from 34 to 35
     ndkVersion = "27.0.12077973"
 
     compileOptions {
@@ -19,7 +19,7 @@ android {
     defaultConfig {
         applicationId = "com.example.untitled"
         minSdk = 21
-        targetSdk = 34
+        targetSdk = 35 // Updated from 34 to 35
         versionCode = 1
         versionName = "1.0.0"
         multiDexEnabled = true

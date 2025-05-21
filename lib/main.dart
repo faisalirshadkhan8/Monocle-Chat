@@ -1,3 +1,5 @@
+// ignore_for_file: avoid_print, prefer_interpolation_to_compose_strings
+
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart'; // Import ProviderScope
@@ -35,7 +37,10 @@ void main() async {
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
   // Print the FCM registration token for testing
-  print("FCM registration token: "+(await FirebaseMessaging.instance.getToken()).toString());
+  print(
+    "FCM registration token: " +
+        (await FirebaseMessaging.instance.getToken()).toString(),
+  );
 
   // Initialize local notifications
   const AndroidInitializationSettings initializationSettingsAndroid =

@@ -1,12 +1,18 @@
 // ignore_for_file: avoid_print
 
+import 'dart:io'; // Import for File
+
+import 'package:flutter/cupertino.dart'; // Import for Cupertino icons
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart'; // Import for Firebase Storage
+import 'package:image_picker/image_picker.dart'; // Import for image_picker
 import 'package:monocle_chat/models/message_model.dart';
 import 'package:monocle_chat/widgets/chat_bubble.dart';
 import 'package:intl/intl.dart';
+import 'package:uuid/uuid.dart'; // Import for generating unique IDs
 
 final currentUserProvider = Provider<User?>((ref) {
   return FirebaseAuth.instance.currentUser;
@@ -30,7 +36,7 @@ final messagesStreamProvider = StreamProvider.autoDispose
     });
 
 class ChatDetailScreen extends ConsumerStatefulWidget {
-  static const String routeName = '/chat_detail'; // Add this line
+  static const String routeName = '/chat_detail';
 
   final String name;
   final String? profilePicture;
@@ -52,6 +58,8 @@ class ChatDetailScreen extends ConsumerStatefulWidget {
 class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
   final TextEditingController _messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+  XFile? _pickedMedia; // To store the selected image/video file
+  bool _isUploading = false; // To track upload state
 
   @override
   void initState() {
@@ -67,14 +75,95 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
     }
   }
 
+  Future<void> _pickMedia(String type, ImageSource source) async {
+    final ImagePicker picker = ImagePicker();
+    XFile? file;
+
+    if (type == 'image') {
+      file = await picker.pickImage(source: source);
+    } else if (type == 'video') {
+      file = await picker.pickVideo(source: source);
+    }
+
+    if (file != null) {
+      setState(() {
+        _pickedMedia = file;
+      });
+    }
+  }
+
+  Future<String?> _uploadMedia(
+    XFile file,
+    String chatRoomId,
+    String messageType,
+  ) async {
+    setState(() {
+      _isUploading = true;
+    });
+    try {
+      final fileName = '${messageType}_${const Uuid().v4()}_${file.name}';
+      final Reference storageRef = FirebaseStorage.instance
+          .ref()
+          .child('chat_media')
+          .child(chatRoomId)
+          .child(fileName);
+
+      final UploadTask uploadTask = storageRef.putFile(File(file.path));
+      final TaskSnapshot snapshot = await uploadTask;
+      final String downloadUrl = await snapshot.ref.getDownloadURL();
+      setState(() {
+        _isUploading = false;
+      });
+      return downloadUrl;
+    } catch (e) {
+      print("Error uploading media: $e");
+      setState(() {
+        _isUploading = false;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to upload media. Please check your connection and try again.')),
+        );
+      }
+      return null;
+    }
+  }
+
   Future<void> _sendMessage() async {
     final currentUser = FirebaseAuth.instance.currentUser;
-    if (_messageController.text.trim().isEmpty || currentUser == null) return;
+    if ((_messageController.text.trim().isEmpty && _pickedMedia == null) ||
+        currentUser == null) {
+      return;
+    }
 
     final messageText = _messageController.text.trim();
     _messageController.clear();
+    XFile? mediaFileToSend = _pickedMedia;
+    setState(() {
+      _pickedMedia = null;
+    });
 
     try {
+      String? mediaUrl;
+      String messageType = 'text';
+
+      if (mediaFileToSend != null) {
+        messageType =
+            mediaFileToSend.path.endsWith('.mp4') ||
+                    mediaFileToSend.path.endsWith('.mov')
+                ? 'video'
+                : 'image';
+        mediaUrl = await _uploadMedia(
+          mediaFileToSend,
+          widget.chatRoomId,
+          messageType,
+        );
+        if (mediaUrl == null) {
+          // Upload failed, do not proceed with sending message
+          return;
+        }
+      }
+
       // Create message document
       await FirebaseFirestore.instance
           .collection('chat_rooms')
@@ -86,14 +175,25 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
             'text': messageText,
             'timestamp': FieldValue.serverTimestamp(),
             'isSeen': false,
+            'mediaUrl': mediaUrl,
+            'messageType': messageType,
           });
 
       // Update chat room metadata
+      String lastMessageContent = messageText;
+      if (messageType == 'image') {
+        lastMessageContent =
+            '[Image]${messageText.isNotEmpty ? ": $messageText" : ""}';
+      } else if (messageType == 'video') {
+        lastMessageContent =
+            '[Video]${messageText.isNotEmpty ? ": $messageText" : ""}';
+      }
+
       await FirebaseFirestore.instance
           .collection('chat_rooms')
           .doc(widget.chatRoomId)
           .update({
-            'lastMessage': messageText,
+            'lastMessage': lastMessageContent,
             'lastMessageTimestamp': FieldValue.serverTimestamp(),
             'lastMessageSenderId': currentUser.uid,
           });
@@ -102,7 +202,7 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error sending message: ${e.toString()}')),
+          const SnackBar(content: Text('Couldn\'t send message. Please try again.')),
         );
       }
     }
@@ -209,14 +309,16 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
                         timestamp: formattedTimestamp,
                         isSent: isSentByCurrentUser,
                         isSeen: message.isSeen,
+                        mediaUrl: message.mediaUrl,
+                        messageType: message.messageType,
                       );
                     },
                   );
                 },
-                loading: () => const Center(child: CircularProgressIndicator()),
+                loading: () => const Center(child: CupertinoActivityIndicator()),
                 error:
                     (error, _) =>
-                        Center(child: Text('Error: ${error.toString()}')),
+                        const Center(child: Text('Failed to load messages. Please try again later.')),
               ),
             ),
             _buildMessageInput(),
@@ -230,26 +332,124 @@ class _ChatDetailScreenState extends ConsumerState<ChatDetailScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
       color: Colors.white,
-      child: Row(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Expanded(
-            child: TextField(
-              controller: _messageController,
-              decoration: const InputDecoration(
-                hintText: 'Compose your message...',
-                border: InputBorder.none,
-                contentPadding: EdgeInsets.symmetric(horizontal: 10),
+          if (_pickedMedia != null &&
+              !_isUploading) // Show a preview if media is picked and not uploading
+            Container(
+              padding: const EdgeInsets.only(bottom: 8),
+              height: 100,
+              child: Row(
+                children: [
+                  Expanded(
+                    child:
+                        _pickedMedia!.path.endsWith('.mp4') ||
+                                _pickedMedia!.path.endsWith('.mov')
+                            ? const Icon(
+                              CupertinoIcons.video_camera_solid,
+                              size: 50,
+                            )
+                            : Image.file(
+                              File(_pickedMedia!.path),
+                              fit: BoxFit.cover,
+                            ),
+                  ),
+                  IconButton(
+                    icon: const Icon(
+                      CupertinoIcons.clear_circled_solid,
+                      color: Colors.red,
+                    ),
+                    onPressed: () {
+                      setState(() {
+                        _pickedMedia = null;
+                      });
+                    },
+                  ),
+                ],
               ),
-              textInputAction: TextInputAction.send,
-              onSubmitted: (_) => _sendMessage(),
             ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.send, color: Color(0xFF2B1A0F)),
-            onPressed: _sendMessage,
+          Row(
+            children: [
+              IconButton(
+                icon: const Icon(
+                  CupertinoIcons.paperclip,
+                  color: Color(0xFF2B1A0F),
+                ),
+                onPressed: _isUploading ? null : _showMediaPickerOptions, // Disable if uploading
+              ),
+              Expanded(
+                child: TextField(
+                  controller: _messageController,
+                  enabled: !_isUploading, // Disable if uploading
+                  decoration: const InputDecoration(
+                    hintText: 'Compose your message...',
+                    border: InputBorder.none,
+                    contentPadding: EdgeInsets.symmetric(horizontal: 10),
+                  ),
+                  textInputAction: TextInputAction.send,
+                  onSubmitted: _isUploading ? null : (_) => _sendMessage(), // Disable if uploading
+                ),
+              ),
+              _isUploading
+                  ? const Padding(
+                      padding: EdgeInsets.all(8.0),
+                      child: CupertinoActivityIndicator(), // Use CupertinoActivityIndicator
+                    )
+                  : IconButton(
+                      icon: const Icon(Icons.send, color: Color(0xFF2B1A0F)),
+                      onPressed: _sendMessage,
+                    ),
+            ],
           ),
         ],
       ),
+    );
+  }
+
+  void _showMediaPickerOptions() {
+    showCupertinoModalPopup(
+      context: context,
+      builder:
+          (BuildContext context) => CupertinoActionSheet(
+            title: const Text('Select Media'),
+            actions: <CupertinoActionSheetAction>[
+              CupertinoActionSheetAction(
+                child: const Text('Pick Image from Gallery'),
+                onPressed: () {
+                  Navigator.pop(context);
+                  _pickMedia('image', ImageSource.gallery);
+                },
+              ),
+              CupertinoActionSheetAction(
+                child: const Text('Take Photo with Camera'),
+                onPressed: () {
+                  Navigator.pop(context);
+                  _pickMedia('image', ImageSource.camera);
+                },
+              ),
+              CupertinoActionSheetAction(
+                child: const Text('Pick Video from Gallery'),
+                onPressed: () {
+                  Navigator.pop(context);
+                  _pickMedia('video', ImageSource.gallery);
+                },
+              ),
+              CupertinoActionSheetAction(
+                child: const Text('Record Video with Camera'),
+                onPressed: () {
+                  Navigator.pop(context);
+                  _pickMedia('video', ImageSource.camera);
+                },
+              ),
+            ],
+            cancelButton: CupertinoActionSheetAction(
+              child: const Text('Cancel'),
+              onPressed: () {
+                Navigator.pop(context);
+              },
+            ),
+          ),
     );
   }
 
